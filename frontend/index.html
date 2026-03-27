@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adaptive Memory System</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --surface2:  #22263a;
+      --accent:    #6c63ff;
+      --accent2:   #48cfad;
+      --danger:    #ff6b6b;
+      --warn:      #feca57;
+      --text:      #e8eaf6;
+      --muted:     #7986cb;
+      --border:    #2e3250;
+      --radius:    12px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    header h1 span { font-size: 1.5rem; }
+    .demo-badge {
+      background: var(--warn);
+      color: #1a1a1a;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .refresh-dot {
+      width: 8px; height: 8px;
+      background: var(--accent2);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(1.4); }
+    }
+
+    main {
+      max-width: 1300px;
+      margin: 0 auto;
+      padding: 28px 24px;
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      grid-template-rows: auto auto 1fr;
+      gap: 20px;
+    }
+
+    /* ── Stats row ── */
+    .stats-row {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      text-align: center;
+    }
+    .stat-card .val {
+      font-size: 2rem;
+      font-weight: 800;
+      line-height: 1;
+      color: var(--accent);
+    }
+    .stat-card .lbl {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .stat-card.green .val  { color: var(--accent2); }
+    .stat-card.red   .val  { color: var(--danger); }
+    .stat-card.warn  .val  { color: var(--warn); }
+
+    /* ── Left column ── */
+    .left-col { display: flex; flex-direction: column; gap: 20px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px;
+    }
+    .card h2 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Add lesson form */
+    .form-group { margin-bottom: 14px; }
+    label { font-size: 0.82rem; color: var(--muted); display: block; margin-bottom: 6px; }
+    input, textarea {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 14px;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+      resize: vertical;
+    }
+    input:focus, textarea:focus { border-color: var(--accent); }
+    textarea { min-height: 80px; font-family: inherit; }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .toggle {
+      width: 40px; height: 22px;
+      background: var(--border);
+      border-radius: 11px;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.2s;
+      border: none;
+      flex-shrink: 0;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px;
+      background: white;
+      border-radius: 50%;
+      top: 3px; left: 3px;
+      transition: left 0.2s;
+    }
+    .toggle.on::after { left: 21px; }
+    .toggle-label { font-size: 0.83rem; color: var(--muted); }
+
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      font-size: 0.92rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: var(--accent); color: white; }
+
+    /* Interval preview */
+    .interval-preview {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-top: 14px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .interval-preview table { width: 100%; border-collapse: collapse; }
+    .interval-preview td { padding: 3px 6px; }
+    .interval-preview .review-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+
+    /* Upcoming reminders */
+    .upcoming-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+    .upcoming-item {
+      background: var(--surface2);
+      border-radius: 8px;
+      padding: 10px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.85rem;
+      border-left: 3px solid var(--accent);
+    }
+    .upcoming-item.overdue  { border-left-color: var(--danger); }
+    .upcoming-item.soon     { border-left-color: var(--warn); }
+    .upcoming-item .lesson-name { font-weight: 600; }
+    .upcoming-item .meta    { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+    .upcoming-item .time-badge {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      white-space: nowrap;
+      margin-left: 10px;
+    }
+    .time-badge.overdue { color: var(--danger); border-color: var(--danger); }
+    .time-badge.now     { color: var(--warn);   border-color: var(--warn);   animation: pulse 1s infinite; }
+
+    /* ── Right column ── */
+    .right-col { display: flex; flex-direction: column; gap: 20px; }
+
+    /* Forgetting curve canvas */
+    .curve-card canvas {
+      width: 100%;
+      max-height: 220px;
+      border-radius: 8px;
+    }
+    .curve-legend {
+      display: flex;
+      gap: 20px;
+      margin-top: 10px;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .curve-legend span { display: flex; align-items: center; gap: 6px; }
+    .curve-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    /* Lessons list */
+    .lessons-list { display: flex; flex-direction: column; gap: 12px; max-height: 480px; overflow-y: auto; }
+
+    .lesson-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+    }
+    .lesson-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+    }
+    .lesson-title { font-weight: 700; font-size: 0.95rem; }
+    .lesson-content { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+    .lesson-time   { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+
+    .btn-delete {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.2s;
+    }
+    .btn-delete:hover { color: var(--danger); }
+
+    /* Review progress bar */
+    .progress-bar {
+      display: flex;
+      gap: 4px;
+      margin-top: 12px;
+    }
+    .progress-segment {
+      flex: 1;
+      height: 8px;
+      border-radius: 4px;
+      background: var(--surface2);
+      position: relative;
+      cursor: default;
+    }
+    .progress-segment.done-ok   { background: var(--accent2); }
+    .progress-segment.done-fail { background: var(--danger); }
+    .progress-segment.active    { background: var(--warn); animation: pulse 1s infinite; }
+    .progress-segment.pending   { background: var(--surface2); border: 1px solid var(--border); }
+
+    .progress-labels {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .progress-label {
+      flex: 1;
+      text-align: center;
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
+
+    /* Empty states */
+    .empty-state {
+      text-align: center;
+      color: var(--muted);
+      padding: 32px 0;
+      font-size: 0.88rem;
+    }
+    .empty-state .icon { font-size: 2.5rem; margin-bottom: 10px; }
+
+    /* Toast notification */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 20px;
+      font-size: 0.88rem;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s ease;
+      z-index: 100;
+      max-width: 320px;
+    }
+    #toast.show { transform: translateY(0); opacity: 1; }
+    #toast.success { border-left: 4px solid var(--accent2); }
+    #toast.error   { border-left: 4px solid var(--danger); }
+    #toast.info    { border-left: 4px solid var(--accent); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      .stats-row { grid-template-columns: repeat(3, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>
+    <span>🧠</span>
+    Adaptive Memory System
+    <span class="demo-badge" id="demoLabel">Demo Mode</span>
+  </h1>
+  <div style="display:flex;align-items:center;gap:12px">
+    <span style="font-size:0.8rem;color:var(--muted)">Auto-refreshing</span>
+    <div class="refresh-dot"></div>
+  </div>
+</header>
+
+<main>
+  <!-- Stats row -->
+  <div class="stats-row" id="statsRow">
+    <div class="stat-card"><div class="val" id="statLessons">–</div><div class="lbl">Lessons</div></div>
+    <div class="stat-card warn"><div class="val" id="statPending">–</div><div class="lbl">Pending Reviews</div></div>
+    <div class="stat-card green"><div class="val" id="statRemembered">–</div><div class="lbl">Remembered</div></div>
+    <div class="stat-card red"><div class="val" id="statForgot">–</div><div class="lbl">Forgot</div></div>
+    <div class="stat-card"><div class="val" id="statRetention">–</div><div class="lbl">Retention Rate</div></div>
+  </div>
+
+  <!-- Left column -->
+  <div class="left-col">
+
+    <!-- Add lesson -->
+    <div class="card">
+      <h2>📖 Add Lesson</h2>
+
+      <div class="form-group">
+        <label>Topic / Lesson Name</label>
+        <input id="lessonTitle" type="text" placeholder="e.g. Neural Networks" />
+      </div>
+      <div class="form-group">
+        <label>Key Points (optional)</label>
+        <textarea id="lessonContent" placeholder="Brief description or key takeaways..."></textarea>
+      </div>
+
+      <div class="toggle-row">
+        <button class="toggle on" id="demoToggle" onclick="toggleDemo()"></button>
+        <span class="toggle-label">
+          Demo Mode — <strong id="demoModeText">days → minutes</strong>
+        </span>
+      </div>
+
+      <button class="btn btn-primary" onclick="addLesson()">+ Log This Lesson</button>
+
+      <div class="interval-preview">
+        <table>
+          <tr><td><span class="review-dot"></span>Review 1</td><td id="iv1"></td><td style="color:#555">(~100% now)</td></tr>
+          <tr><td><span class="review-dot"></span>Review 2</td><td id="iv2"></td><td style="color:#555">(~58% retained)</td></tr>
+          <tr><td><span class="review-dot"></span>Review 3</td><td id="iv3"></td><td style="color:#555">(~37% retained)</td></tr>
+          <tr><td><span class="review-dot"></span>Review 4</td><td id="iv4"></td><td style="color:#555">(~26% retained)</td></tr>
+          <tr><td><span class="review-dot"></span>Review 5</td><td id="iv5"></td><td style="color:#555">(~16% retained)</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- Upcoming reminders -->
+    <div class="card">
+      <h2>⏰ Upcoming Reviews</h2>
+      <div class="upcoming-list" id="upcomingList">
+        <div class="empty-state"><div class="icon">📭</div>No reminders yet</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Right column -->
+  <div class="right-col">
+
+    <!-- Forgetting curve -->
+    <div class="card curve-card">
+      <h2>📉 Ebbinghaus Forgetting Curve</h2>
+      <canvas id="curveCanvas" height="200"></canvas>
+      <div class="curve-legend">
+        <span><span class="dot" style="background:var(--accent)"></span>Without revision</span>
+        <span><span class="dot" style="background:var(--accent2)"></span>With spaced repetition</span>
+        <span><span class="dot" style="background:var(--warn)"></span>Review points</span>
+      </div>
+    </div>
+
+    <!-- All lessons -->
+    <div class="card" style="flex:1">
+      <h2>🗂️ All Lessons</h2>
+      <div class="lessons-list" id="lessonsList">
+        <div class="empty-state"><div class="icon">🌱</div>Add your first lesson to get started</div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+  const API = 'http://localhost:8000';
+  let demoMode = true;
+  let state = { lessons: [], upcoming: [], stats: {} };
+
+  // ── Intervals ──
+  const DEMO_INTERVALS  = { 1:'1 min', 2:'3 min', 3:'7 min', 4:'14 min', 5:'30 min' };
+  const REAL_INTERVALS  = { 1:'1 day', 2:'3 days', 3:'7 days', 4:'14 days', 5:'30 days' };
+
+  function updateIntervalPreview() {
+    const iv = demoMode ? DEMO_INTERVALS : REAL_INTERVALS;
+    document.getElementById('iv1').textContent = iv[1];
+    document.getElementById('iv2').textContent = iv[2];
+    document.getElementById('iv3').textContent = iv[3];
+    document.getElementById('iv4').textContent = iv[4];
+    document.getElementById('iv5').textContent = iv[5];
+  }
+
+  function toggleDemo() {
+    demoMode = !demoMode;
+    const t = document.getElementById('demoToggle');
+    const label = document.getElementById('demoLabel');
+    const txt   = document.getElementById('demoModeText');
+    t.classList.toggle('on', demoMode);
+    label.style.display = demoMode ? '' : 'none';
+    txt.textContent = demoMode ? 'days → minutes' : 'real intervals';
+    updateIntervalPreview();
+  }
+  updateIntervalPreview();
+
+  // ── Toast ──
+  function toast(msg, type='info') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `show ${type}`;
+    setTimeout(() => el.className = '', 3000);
+  }
+
+  // ── Add lesson ──
+  async function addLesson() {
+    const title   = document.getElementById('lessonTitle').value.trim();
+    const content = document.getElementById('lessonContent').value.trim();
+    if (!title) { toast('Please enter a lesson topic', 'error'); return; }
+
+    try {
+      const res = await fetch(`${API}/api/lessons`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, content, demo_mode: demoMode })
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      toast(`"${title}" added! ${data.reminders.length} reviews scheduled.`, 'success');
+      document.getElementById('lessonTitle').value  = '';
+      document.getElementById('lessonContent').value = '';
+      fetchAll();
+    } catch {
+      toast('Failed to add lesson. Is the backend running?', 'error');
+    }
+  }
+
+  // Allow Enter key in title field
+  document.getElementById('lessonTitle').addEventListener('keydown', e => {
+    if (e.key === 'Enter') addLesson();
+  });
+
+  // ── Delete lesson ──
+  async function deleteLesson(id, title) {
+    if (!confirm(`Delete "${title}" and all its reminders?`)) return;
+    await fetch(`${API}/api/lessons/${id}`, { method: 'DELETE' });
+    toast(`"${title}" deleted`, 'info');
+    fetchAll();
+  }
+
+  // ── Fetch everything ──
+  async function fetchAll() {
+    try {
+      const [lessons, upcoming, stats] = await Promise.all([
+        fetch(`${API}/api/lessons`).then(r => r.json()),
+        fetch(`${API}/api/reminders/upcoming?limit=15`).then(r => r.json()),
+        fetch(`${API}/api/stats`).then(r => r.json()),
+      ]);
+      state = { lessons, upcoming, stats };
+      renderStats(stats);
+      renderUpcoming(upcoming);
+      renderLessons(lessons);
+    } catch {
+      // Backend might not be up yet — silently retry
+    }
+  }
+
+  // ── Stats ──
+  function renderStats(s) {
+    document.getElementById('statLessons').textContent    = s.total_lessons ?? 0;
+    document.getElementById('statPending').textContent    = s.reminders_pending ?? 0;
+    document.getElementById('statRemembered').textContent = s.reminders_remembered ?? 0;
+    document.getElementById('statForgot').textContent     = s.reminders_forgot ?? 0;
+    document.getElementById('statRetention').textContent  =
+      s.retention_rate != null ? Math.round(s.retention_rate * 100) + '%' : '–';
+
+    const demo = s.demo_mode ?? true;
+    document.getElementById('demoLabel').style.display = demo ? '' : 'none';
+  }
+
+  // ── Upcoming ──
+  function renderUpcoming(items) {
+    const el = document.getElementById('upcomingList');
+    if (!items.length) {
+      el.innerHTML = '<div class="empty-state"><div class="icon">📭</div>No upcoming reviews</div>';
+      return;
+    }
+    el.innerHTML = items.map(r => {
+      const secs = r.seconds_until_due;
+      let timeStr, cls = '';
+      if (r.is_overdue) { timeStr = 'NOW!'; cls = 'overdue'; }
+      else if (secs < 60) { timeStr = `${secs}s`; cls = 'now'; }
+      else if (secs < 3600) { timeStr = `${Math.floor(secs/60)}m ${secs%60}s`; cls = secs < 120 ? 'now' : ''; }
+      else { timeStr = `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m`; }
+
+      const itemCls = r.is_overdue ? 'overdue' : (secs < 120 ? 'soon' : '');
+      return `
+        <div class="upcoming-item ${itemCls}">
+          <div>
+            <div class="lesson-name">${esc(r.lesson_title)}</div>
+            <div class="meta">Review #${r.review_number} · ${r.interval_label ?? ''}</div>
+          </div>
+          <div class="time-badge ${cls}">${timeStr}</div>
+        </div>`;
+    }).join('');
+  }
+
+  // ── Lessons list ──
+  function renderLessons(lessons) {
+    const el = document.getElementById('lessonsList');
+    if (!lessons.length) {
+      el.innerHTML = '<div class="empty-state"><div class="icon">🌱</div>Add your first lesson to get started</div>';
+      return;
+    }
+
+    el.innerHTML = lessons.map(lesson => {
+      const reminders = lesson.reminders || [];
+      const segments = [1,2,3,4,5].map(n => {
+        const r = reminders.find(x => x.review_number === n);
+        if (!r) return `<div class="progress-segment pending"></div>`;
+        let cls = 'pending';
+        if (r.status === 'remembered') cls = 'done-ok';
+        else if (r.status === 'forgot') cls = 'done-fail';
+        else if (r.status === 'sent') cls = 'active';
+        return `<div class="progress-segment ${cls}" title="Review #${n}: ${r.status}"></div>`;
+      }).join('');
+
+      const labels = [1,2,3,4,5].map(n =>
+        `<div class="progress-label">#${n}</div>`
+      ).join('');
+
+      const created = new Date(lesson.created_at + 'Z');
+      const timeAgo = formatTimeAgo(created);
+
+      return `
+        <div class="lesson-card">
+          <div class="lesson-card-header">
+            <div>
+              <div class="lesson-title">${esc(lesson.title)}</div>
+              ${lesson.content ? `<div class="lesson-content">${esc(lesson.content.slice(0, 80))}${lesson.content.length > 80 ? '…' : ''}</div>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+              <span class="lesson-time">${timeAgo}</span>
+              <button class="btn-delete" onclick="deleteLesson(${lesson.id}, '${esc(lesson.title).replace(/'/g,"\\'")}')">🗑</button>
+            </div>
+          </div>
+          <div style="margin-top:10px">
+            <div class="progress-bar">${segments}</div>
+            <div class="progress-labels">${labels}</div>
+          </div>
+          <div style="font-size:0.75rem;color:var(--muted);margin-top:6px">
+            ${lesson.reminders_completed}/${lesson.reminders_total} reviews complete
+            ${lesson.next_review_at ? ` · Next: Review #${lesson.next_review_number} at ${formatTime(lesson.next_review_at)}` : ' · All done!'}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  // ── Forgetting Curve Canvas ──
+  function drawCurve() {
+    const canvas = document.getElementById('curveCanvas');
+    const W = canvas.offsetWidth || 700;
+    const H = 200;
+    canvas.width  = W * window.devicePixelRatio;
+    canvas.height = H * window.devicePixelRatio;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+    const pad = { top: 16, right: 20, bottom: 30, left: 44 };
+    const cW = W - pad.left - pad.right;
+    const cH = H - pad.top - pad.bottom;
+
+    // Background
+    ctx.fillStyle = '#1a1d27';
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid lines
+    ctx.strokeStyle = '#2e3250';
+    ctx.lineWidth = 0.5;
+    for (let pct = 0; pct <= 100; pct += 25) {
+      const y = pad.top + cH * (1 - pct / 100);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + cW, y);
+      ctx.stroke();
+      ctx.fillStyle = '#7986cb';
+      ctx.font = '10px system-ui';
+      ctx.textAlign = 'right';
+      ctx.fillText(pct + '%', pad.left - 6, y + 4);
+    }
+
+    const totalMinutes = 30; // demo mode max (30 min = review 5)
+    const reviewPoints = [1, 3, 7, 14, 30]; // demo minutes
+
+    function xPos(min) { return pad.left + (min / totalMinutes) * cW; }
+    function yPos(pct) { return pad.top + cH * (1 - pct / 100); }
+
+    // Ebbinghaus decay without review: R = 100 * e^(-t/S), S=2 (demo)
+    function forgettingCurve(t) {
+      return 100 * Math.exp(-t / 4);
+    }
+
+    // With spaced repetition: resets to ~95% at each review point, then decays slower
+    function spaceRepCurve(t) {
+      let stability = 4;
+      let lastReview = 0;
+      let retention = 100;
+      for (const rp of reviewPoints) {
+        if (t < rp) {
+          const elapsed = t - lastReview;
+          return retention * Math.exp(-elapsed / stability);
+        }
+        const elapsed = rp - lastReview;
+        retention = Math.min(100, retention * Math.exp(-elapsed / stability) * 1.8 + 10);
+        stability *= 2.2;
+        lastReview = rp;
+      }
+      return Math.min(100, retention * Math.exp(-(t - lastReview) / stability));
+    }
+
+    // Draw without-revision curve
+    ctx.beginPath();
+    ctx.strokeStyle = '#6c63ff';
+    ctx.lineWidth = 2;
+    for (let i = 0; i <= 200; i++) {
+      const t = (i / 200) * totalMinutes;
+      const r = forgettingCurve(t);
+      const x = xPos(t), y = yPos(Math.max(0, r));
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Draw with-spaced-repetition curve
+    ctx.beginPath();
+    ctx.strokeStyle = '#48cfad';
+    ctx.lineWidth = 2;
+    for (let i = 0; i <= 200; i++) {
+      const t = (i / 200) * totalMinutes;
+      const r = spaceRepCurve(t);
+      const x = xPos(t), y = yPos(Math.max(0, r));
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Review point markers
+    reviewPoints.forEach((rp, idx) => {
+      const x = xPos(rp);
+      ctx.beginPath();
+      ctx.strokeStyle = '#feca57';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.moveTo(x, pad.top);
+      ctx.lineTo(x, pad.top + cH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#feca57';
+      ctx.beginPath();
+      ctx.arc(x, pad.top + 8, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#feca57';
+      ctx.font = 'bold 9px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(`R${idx+1}`, x, pad.top + cH + 16);
+    });
+
+    // X-axis label
+    ctx.fillStyle = '#7986cb';
+    ctx.font = '10px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('Time →  (minutes in demo mode, days in real mode)', pad.left + cW / 2, H - 2);
+  }
+
+  // ── Helpers ──
+  function esc(str) {
+    return String(str)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+
+  function formatTimeAgo(date) {
+    const secs = Math.floor((Date.now() - date) / 1000);
+    if (secs < 60) return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+    if (secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+    return date.toLocaleDateString();
+  }
+
+  function formatTime(iso) {
+    const d = new Date(iso + (iso.endsWith('Z') ? '' : 'Z'));
+    return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  }
+
+  // ── Boot ──
+  drawCurve();
+  window.addEventListener('resize', drawCurve);
+  fetchAll();
+  setInterval(fetchAll, 5000);   // refresh every 5 seconds
+  setInterval(renderUpcoming.bind(null, state.upcoming), 1000); // countdown every second
+</script>
+</body>
+</html>

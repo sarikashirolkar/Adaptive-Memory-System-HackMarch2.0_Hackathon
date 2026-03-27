@@ -1,0 +1,303 @@
+{
+  "name": "Ebbinghaus Reminder System",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "* * * * *"
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-0001-0001-0001-000000000001",
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://backend:8000/api/reminders/due",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "a1b2c3d4-0002-0002-0002-000000000002",
+      "name": "Get Due Reminders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=🔔 *Time to Revise!*\n\n📚 *{{ $json.lesson_title }}*\n{{ $json.lesson_content ? '💡 ' + $json.lesson_content : '' }}\n\n🔄 This is Review *#{{ $json.review_number }}* ({{ $json.interval_label }})\n📉 Estimated current retention: *~{{ $json.retention_estimate }}%*\n\nDo you remember this topic?",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "reply_markup": "={\"inline_keyboard\":[[{\"text\":\"✅ Remembered\",\"callback_data\":\"remembered:{{ $json.id }}\"},{\"text\":\"❌ Forgot\",\"callback_data\":\"forgot:{{ $json.id }}\"}]]}"
+        }
+      },
+      "id": "a1b2c3d4-0004-0004-0004-000000000004",
+      "name": "Send Telegram Reminder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [900, 220],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-cred-1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://backend:8000/api/reminders/{{ $('Get Due Reminders').item.json.id }}/mark-sent",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "telegram_message_id": "={{ $json.result.message_id }}"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-0005-0005-000000000005",
+      "name": "Mark Reminder Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-lesson",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0012-0012-0012-000000000012",
+      "name": "New Lesson Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 780],
+      "webhookId": "ebbinghaus-new-lesson"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/lessons",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "title":     "={{ $json.body.title }}",
+          "content":   "={{ $json.body.content }}",
+          "demo_mode": "={{ $json.body.demo_mode }}"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0013-0013-0013-000000000013",
+      "name": "Create Lesson in Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 780]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=📚 *New lesson logged!*\n\n*{{ $('New Lesson Webhook').item.json.body.title }}*\n\n✅ 5 spaced reviews scheduled. You'll get your first reminder in {{ $('New Lesson Webhook').item.json.body.demo_mode ? '1 minute' : '1 day' }}.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "a1b2c3d4-0014-0014-0014-000000000014",
+      "name": "Notify New Lesson",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [680, 780],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-cred-1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Create Lesson in Backend').item.json) }}"
+      },
+      "id": "a1b2c3d4-0015-0015-0015-000000000015",
+      "name": "Respond with Lesson",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [900, 780]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telegram-callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-0006-0006-000000000006",
+      "name": "Telegram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 560],
+      "webhookId": "ebbinghaus-telegram-callback"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse incoming Telegram callback_query\nconst body = $input.item.json.body;\n\nif (!body || !body.callback_query) {\n  // Not a callback query — might be a regular message, ignore\n  return [];\n}\n\nconst cq = body.callback_query;\nconst parts = cq.data.split(':');\nconst response = parts[0];     // 'remembered' or 'forgot'\nconst reminderId = parts[1];   // reminder id as string\n\nreturn [{\n  json: {\n    callback_query_id: cq.id,\n    reminder_id: parseInt(reminderId),\n    response: response,\n    chat_id: String(cq.message.chat.id),\n    message_id: cq.message.message_id,\n    original_text: cq.message.text || ''\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0007-0007-0007-000000000007",
+      "name": "Parse Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 560]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://backend:8000/api/reminders/{{ $json.reminder_id }}/feedback",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "response": "={{ $json.response }}"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0008-0008-0008-000000000008",
+      "name": "Post Feedback to Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 560]
+    },
+    {
+      "parameters": {
+        "operation": "answerCallbackQuery",
+        "queryId": "={{ $('Parse Callback').item.json.callback_query_id }}",
+        "text": "={{ $('Parse Callback').item.json.response === 'remembered' ? '✅ Great! Moving to your next review.' : '❌ Rescheduled! You will be reminded again soon.' }}",
+        "additionalFields": {
+          "show_alert": false
+        }
+      },
+      "id": "a1b2c3d4-0009-0009-0009-000000000009",
+      "name": "Answer Callback Query",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [900, 480],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-cred-1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "editMessageText",
+        "messageId": "={{ $('Parse Callback').item.json.message_id }}",
+        "text": "={{ $('Parse Callback').item.json.original_text }}\n\n{{ $('Parse Callback').item.json.response === 'remembered' ? '✅ *Marked as: Remembered* — Great work! Stability increasing.' : '❌ *Marked as: Forgot* — Rescheduled for another attempt soon.' }}",
+        "additionalFields": {
+          "chat_id": "={{ $('Parse Callback').item.json.chat_id }}",
+          "parse_mode": "Markdown",
+          "reply_markup": "{}"
+        }
+      },
+      "id": "a1b2c3d4-0010-0010-0010-000000000010",
+      "name": "Edit Message (Remove Buttons)",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [900, 620],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-cred-1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\": true}"
+      },
+      "id": "a1b2c3d4-0011-0011-0011-000000000011",
+      "name": "Respond to Telegram",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 560]
+    }
+  ],
+  "connections": {
+    "Every Minute": {
+      "main": [
+        [{ "node": "Get Due Reminders", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Due Reminders": {
+      "main": [
+        [{ "node": "Send Telegram Reminder", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Telegram Reminder": {
+      "main": [
+        [{ "node": "Mark Reminder Sent", "type": "main", "index": 0 }]
+      ]
+    },
+    "New Lesson Webhook": {
+      "main": [
+        [{ "node": "Create Lesson in Backend", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Lesson in Backend": {
+      "main": [
+        [{ "node": "Notify New Lesson", "type": "main", "index": 0 }]
+      ]
+    },
+    "Notify New Lesson": {
+      "main": [
+        [{ "node": "Respond with Lesson", "type": "main", "index": 0 }]
+      ]
+    },
+    "Telegram Webhook": {
+      "main": [
+        [{ "node": "Parse Callback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Callback": {
+      "main": [
+        [{ "node": "Post Feedback to Backend", "type": "main", "index": 0 }]
+      ]
+    },
+    "Post Feedback to Backend": {
+      "main": [
+        [
+          { "node": "Answer Callback Query", "type": "main", "index": 0 },
+          { "node": "Edit Message (Remove Buttons)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Answer Callback Query": {
+      "main": [
+        [{ "node": "Respond to Telegram", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": ["ebbinghaus", "spaced-repetition", "hackmarch"],
+  "triggerCount": 0,
+  "updatedAt": "2026-03-26T00:00:00.000Z",
+  "versionId": "v1"
+}

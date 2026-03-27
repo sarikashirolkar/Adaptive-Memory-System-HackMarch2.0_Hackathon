@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# Local runtime data
+data/
+n8n-data/
+
+# Logs
+*.log
+
+# Editor
+.idea/
+.vscode/

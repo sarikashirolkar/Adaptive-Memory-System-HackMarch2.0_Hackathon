@@ -1,0 +1,62 @@
+services:
+
+  backend:
+    build: ./backend
+    container_name: memory_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/data/memory.db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: memory_n8n
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./n8n-data:/home/node/.n8n
+      - ./n8n-workflows:/workflows
+    environment:
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678}
+      - N8N_BASIC_AUTH_ACTIVE=false
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      # Expose BACKEND_URL so n8n nodes can reference $env.BACKEND_URL
+      - BACKEND_URL=http://backend:8000
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+    env_file:
+      - .env
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: memory_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - N8N_URL=http://n8n:5678
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  default:
+    name: memory_network
