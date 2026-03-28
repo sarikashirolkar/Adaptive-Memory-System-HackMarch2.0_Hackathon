@@ -38,24 +38,18 @@
     },
     {
       "parameters": {
-        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
-        "text": "=🔔 *Time to Revise!*\n\n📚 *{{ $json.lesson_title }}*\n{{ $json.lesson_content ? '💡 ' + $json.lesson_content : '' }}\n\n🔄 This is Review *#{{ $json.review_number }}* ({{ $json.interval_label }})\n📉 Estimated current retention: *~{{ $json.retention_estimate }}%*\n\nDo you remember this topic?",
-        "additionalFields": {
-          "parse_mode": "Markdown",
-          "reply_markup": "={\"inline_keyboard\":[[{\"text\":\"✅ Remembered\",\"callback_data\":\"remembered:{{ $json.id }}\"},{\"text\":\"❌ Forgot\",\"callback_data\":\"forgot:{{ $json.id }}\"}]]}"
-        }
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: '🔔 *Time to Revise!*\\n\\n📚 *' + $json.lesson_title + '*\\n' + ($json.lesson_content ? '💡 ' + $json.lesson_content : '') + '\\n\\n🔄 This is Review *#' + $json.review_number + '* (' + $json.interval_label + ')\\n📉 Estimated current retention: *~' + $json.retention_estimate + '%*\\n\\nDo you remember this topic?', parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '✅ Remembered', callback_data: 'remembered:' + $json.id }, { text: '❌ Forgot', callback_data: 'forgot:' + $json.id }]] } }) }}",
+        "options": {}
       },
       "id": "a1b2c3d4-0004-0004-0004-000000000004",
       "name": "Send Telegram Reminder",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.1,
-      "position": [900, 220],
-      "credentials": {
-        "telegramApi": {
-          "id": "telegram-cred-1",
-          "name": "Telegram Bot"
-        }
-      }
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 220]
     },
     {
       "parameters": {
@@ -63,9 +57,8 @@
         "url": "=http://backend:8000/api/reminders/{{ $('Get Due Reminders').item.json.id }}/mark-sent",
         "sendBody": true,
         "contentType": "json",
-        "body": {
-          "telegram_message_id": "={{ $json.result.message_id }}"
-        },
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ telegram_message_id: $json.result.message_id }) }}",
         "options": {}
       },
       "id": "a1b2c3d4-0005-0005-0005-000000000005",
@@ -97,7 +90,7 @@
         "body": {
           "title":     "={{ $json.body.title }}",
           "content":   "={{ $json.body.content }}",
-          "demo_mode": "={{ $json.body.demo_mode }}"
+          "demo_mode": "={{ Boolean($json.body.demo_mode) }}"
         },
         "options": {}
       },
@@ -167,10 +160,8 @@
         "method": "POST",
         "url": "=http://backend:8000/api/reminders/{{ $json.reminder_id }}/feedback",
         "sendBody": true,
-        "contentType": "json",
-        "body": {
-          "response": "={{ $json.response }}"
-        },
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ response: $json.response }) }}",
         "options": {}
       },
       "id": "a1b2c3d4-0008-0008-0008-000000000008",
@@ -181,47 +172,33 @@
     },
     {
       "parameters": {
-        "operation": "answerCallbackQuery",
-        "queryId": "={{ $('Parse Callback').item.json.callback_query_id }}",
-        "text": "={{ $('Parse Callback').item.json.response === 'remembered' ? '✅ Great! Moving to your next review.' : '❌ Rescheduled! You will be reminded again soon.' }}",
-        "additionalFields": {
-          "show_alert": false
-        }
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $('Parse Callback').item.json.callback_query_id, text: $('Parse Callback').item.json.response === 'remembered' ? '✅ Great! Moving to your next review.' : '❌ Rescheduled! You will be reminded again soon.', show_alert: false }) }}",
+        "options": {}
       },
       "id": "a1b2c3d4-0009-0009-0009-000000000009",
       "name": "Answer Callback Query",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.1,
-      "position": [900, 480],
-      "credentials": {
-        "telegramApi": {
-          "id": "telegram-cred-1",
-          "name": "Telegram Bot"
-        }
-      }
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 480]
     },
     {
       "parameters": {
-        "operation": "editMessageText",
-        "messageId": "={{ $('Parse Callback').item.json.message_id }}",
-        "text": "={{ $('Parse Callback').item.json.original_text }}\n\n{{ $('Parse Callback').item.json.response === 'remembered' ? '✅ *Marked as: Remembered* — Great work! Stability increasing.' : '❌ *Marked as: Forgot* — Rescheduled for another attempt soon.' }}",
-        "additionalFields": {
-          "chat_id": "={{ $('Parse Callback').item.json.chat_id }}",
-          "parse_mode": "Markdown",
-          "reply_markup": "{}"
-        }
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/editMessageText",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Parse Callback').item.json.chat_id, message_id: $('Parse Callback').item.json.message_id, text: $('Parse Callback').item.json.original_text + '\\n\\n' + ($('Parse Callback').item.json.response === 'remembered' ? '✅ Marked as: Remembered — Great work!' : '❌ Marked as: Forgot — Rescheduled for another attempt.'), parse_mode: 'Markdown', reply_markup: JSON.stringify({ inline_keyboard: [] }) }) }}",
+        "options": {}
       },
       "id": "a1b2c3d4-0010-0010-0010-000000000010",
       "name": "Edit Message (Remove Buttons)",
-      "type": "n8n-nodes-base.telegram",
-      "typeVersion": 1.1,
-      "position": [900, 620],
-      "credentials": {
-        "telegramApi": {
-          "id": "telegram-cred-1",
-          "name": "Telegram Bot"
-        }
-      }
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 620]
     },
     {
       "parameters": {
