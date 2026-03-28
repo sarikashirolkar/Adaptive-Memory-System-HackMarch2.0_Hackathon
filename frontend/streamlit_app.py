@@ -5,6 +5,11 @@ import math
 import os
 import time
 from datetime import datetime, timezone
+import google.generativeai as genai
+import json
+import re
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # ── Config ──────────────────────────────────────────────────────────────────
 API_BASE    = os.getenv("BACKEND_URL", "http://localhost:8000")
@@ -21,7 +26,8 @@ st.set_page_config(
 # ── Auto-refresh ─────────────────────────────────────────────────────────────
 try:
     from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=REFRESH_MS, key="dashboard_refresh")
+    if time.time() >= st.session_state.get("suspend_autorefresh_until", 0):
+        st_autorefresh(interval=REFRESH_MS, key="dashboard_refresh")
 except ImportError:
     pass   # works without it; user just refreshes manually
 
@@ -130,6 +136,110 @@ def api_delete(path: str):
         return r.ok
     except Exception:
         return False
+
+
+def get_gemini_model_name(api_key: str) -> str:
+    """
+    Resolve a supported Gemini model dynamically.
+    Priority:
+    1) GEMINI_MODEL env override
+    2) Preferred flash models available to this key
+    3) First model that supports generateContent
+    """
+    override = os.getenv("GEMINI_MODEL", "").strip()
+    if override:
+        return override
+
+    cache_key = "_resolved_gemini_model"
+    cached = st.session_state.get(cache_key)
+    if cached:
+        return cached
+
+    genai.configure(api_key=api_key)
+    models = list(genai.list_models())
+    supported = [
+        m.name for m in models
+        if "generateContent" in getattr(m, "supported_generation_methods", [])
+    ]
+    if not supported:
+        raise RuntimeError("No Gemini models with generateContent are available for this API key.")
+
+    preferred = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash",
+    ]
+
+    for pref in preferred:
+        for name in supported:
+            if name.endswith("/" + pref) or name == pref:
+                st.session_state[cache_key] = name
+                return name
+
+    st.session_state[cache_key] = supported[0]
+    return supported[0]
+
+
+def parse_json_payload(raw: str) -> dict:
+    """Extract and parse JSON payload from Gemini text responses."""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("Empty response from model.")
+
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        text = fenced.group(1).strip()
+    else:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end + 1]
+
+    return json.loads(text)
+
+
+def normalize_quiz_data(payload: dict) -> dict:
+    """Normalize question schema so UI logic doesn't break on slight model drift."""
+    questions = payload.get("questions", [])
+    if not isinstance(questions, list) or not questions:
+        raise ValueError("Model did not return any questions.")
+
+    normalized = []
+    labels = ["A", "B", "C", "D"]
+    for q in questions[:5]:
+        question = str(q.get("question", "")).strip()
+        options = q.get("options", [])
+        if not question or not isinstance(options, list) or len(options) < 4:
+            continue
+
+        clean_options = [str(opt).strip() for opt in options[:4]]
+        lettered_options = []
+        for idx, opt in enumerate(clean_options):
+            if re.match(r"^[A-Da-d][\.\):]\s*", opt):
+                lettered_options.append(opt)
+            else:
+                lettered_options.append(f"{labels[idx]}. {opt}")
+
+        correct_raw = str(q.get("correct", "")).strip()
+        correct_match = re.match(r"([A-Da-d])", correct_raw)
+        if correct_match:
+            correct = correct_match.group(1).upper()
+        else:
+            correct = next(
+                (labels[i] for i, opt in enumerate(lettered_options) if correct_raw.lower() in opt.lower()),
+                "A",
+            )
+
+        normalized.append({
+            "question": question,
+            "options": lettered_options,
+            "correct": correct,
+        })
+
+    if len(normalized) < 3:
+        raise ValueError("Could not parse enough valid questions from model output.")
+    return {"questions": normalized}
 
 def format_countdown(seconds: float) -> tuple[str, str]:
     """Returns (label, css_class)"""
@@ -262,7 +372,9 @@ with col_h2:
 st.divider()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_dash, tab_add, tab_lessons = st.tabs(["📊 Dashboard", "📖 Add Lesson", "🗂️ All Lessons"])
+tab_dash, tab_add, tab_lessons, tab_stats, tab_quiz, tab_chat = st.tabs([
+    "📊 Dashboard", "📖 Add Lesson", "🗂️ All Lessons", "📈 Stats", "📝 Quiz", "🤖 Chatbot"
+])
 
 
 # ════════ TAB 1: DASHBOARD ════════════════════════════════════
@@ -487,3 +599,325 @@ with tab_lessons:
                 if st.button(f"🗑 Delete", key=f"del_{lesson['id']}", help=f"Delete \"{lesson['title']}\""):
                     if api_delete(f"/api/lessons/{lesson['id']}"):
                         st.rerun()
+
+
+# ════════ TAB 4: STATS (HEATMAP) ════════════════════════════════
+with tab_stats:
+    st.markdown("### 📈 Lesson Analytics")
+    st.caption("Choose a lesson to view revision depth, quiz participation, completion left, and overall progress quality.")
+
+    lessons_data = api_get("/api/lessons") or []
+    if not lessons_data:
+        st.markdown(
+            "<div style='text-align:center;color:#7986cb;padding:48px'>"
+            "<div style='font-size:3rem'>📭</div>"
+            "<div>No lessons yet — add one to see analytics</div>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    else:
+        lesson_titles = [l["title"] for l in lessons_data]
+        selected_stats_lesson = st.selectbox(
+            "Select lesson for analytics",
+            lesson_titles,
+            key="stats_lesson_select",
+        )
+        selected_meta = next(l for l in lessons_data if l["title"] == selected_stats_lesson)
+        analytics = api_get(f"/api/lessons/{selected_meta['id']}/analytics")
+
+        if not analytics:
+            st.error("Unable to load lesson analytics right now.")
+        else:
+            done = analytics.get("review_stages_completed", 0)
+            left = analytics.get("review_stages_remaining", 0)
+            quizzes_attended = analytics.get("quizzes_attended", 0)
+            revision_attempts = analytics.get("reminder_attempts_total", 0)
+            retention_rate = int((analytics.get("retention_rate", 0) or 0) * 100)
+            retry_count = analytics.get("retry_count", 0)
+            completion_pct = int((analytics.get("completion_pct", 0) or 0) * 100)
+
+            m1, m2, m3, m4, m5, m6 = st.columns(6)
+            m1.metric("Done", f"{done}/5")
+            m2.metric("Left", left)
+            m3.metric("Quizzes Attended", quizzes_attended)
+            m4.metric("Revision Attempts", revision_attempts)
+            m5.metric("Recall Stability", f"{retention_rate}%")
+            m6.metric("Retries", retry_count)
+
+            st.progress(max(0.0, min(1.0, completion_pct / 100)), text=f"Completion progress: {completion_pct}%")
+
+            stage_details = analytics.get("stage_details", [])
+            x_labels = [f"R{d['review_number']}" for d in stage_details]
+            attempts = [d["attempts"] for d in stage_details]
+            states = ["Completed" if d["completed"] else "Pending" for d in stage_details]
+
+            sns.set_theme(style="darkgrid")
+            fig, ax = plt.subplots(figsize=(8, 3.8))
+            sns.barplot(x=x_labels, y=attempts, hue=states, palette={"Completed": "#48cfad", "Pending": "#feca57"}, ax=ax)
+            ax.set_title("Revision Attempts by Review Stage")
+            ax.set_xlabel("Review Stage")
+            ax.set_ylabel("Attempts")
+            ax.legend(title="Stage State")
+            st.pyplot(fig, clear_figure=True, use_container_width=True)
+
+            c_quiz, c_status = st.columns(2)
+            with c_quiz:
+                st.markdown("**Quiz Activity**")
+                diff = analytics.get("quiz_difficulty_breakdown", {})
+                st.write(
+                    f"- Easy quizzes: {diff.get('easy', 0)}\n"
+                    f"- Medium quizzes: {diff.get('medium', 0)}\n"
+                    f"- Hard quizzes: {diff.get('hard', 0)}"
+                )
+            with c_status:
+                st.markdown("**Revision Status**")
+                status = analytics.get("reminder_attempt_status_counts", {})
+                st.write(
+                    f"- Remembered attempts: {status.get('remembered', 0)}\n"
+                    f"- Forgot attempts: {status.get('forgot', 0)}\n"
+                    f"- Pending attempts: {status.get('pending', 0)}\n"
+                    f"- Sent (awaiting response): {status.get('sent', 0)}"
+                )
+
+            st.markdown("### 🧾 Overall Review")
+            st.info(analytics.get("overall_review", "No overall review available yet."))
+
+
+# ════════ TAB 5: QUIZ ═══════════════════════════════════════════
+with tab_quiz:
+    st.markdown("### 📝 Quiz Yourself")
+    st.caption("Test your knowledge — your revision schedule adjusts automatically based on your score.")
+
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+    if not GEMINI_API_KEY:
+        st.error("GEMINI_API_KEY not set. Add it to your .env file and restart Docker.")
+    else:
+        quiz_lessons = api_get("/api/lessons") or []
+
+        if not quiz_lessons:
+            st.info("Add a lesson first to take a quiz.")
+        else:
+            # Pre-select lesson from URL param (set when clicking quiz button in Telegram)
+            url_lesson_id = st.query_params.get("lesson_id", "")
+            lesson_names  = [l["title"] for l in quiz_lessons]
+            default_idx   = 0
+            if url_lesson_id:
+                for i, l in enumerate(quiz_lessons):
+                    if str(l["id"]) == str(url_lesson_id):
+                        default_idx = i
+                        break
+
+            col_sel, col_diff = st.columns([2, 1])
+            with col_sel:
+                selected_title = st.selectbox("Select Lesson", lesson_names, index=default_idx, key="quiz_lesson_sel")
+            with col_diff:
+                difficulty = st.radio("Difficulty", ["Easy", "Medium", "Hard"], horizontal=True, key="quiz_diff")
+
+            selected_lesson = next(l for l in quiz_lessons if l["title"] == selected_title)
+
+            # Clear quiz state if lesson or difficulty changed
+            prev_key = st.session_state.get("quiz_prev_key", "")
+            curr_key = f"{selected_lesson['id']}_{difficulty}"
+            if prev_key != curr_key:
+                for k in ["quiz_questions", "quiz_answers", "quiz_submitted",
+                          "quiz_score", "quiz_correct", "quiz_total", "quiz_result"]:
+                    st.session_state.pop(k, None)
+                st.session_state["quiz_prev_key"] = curr_key
+
+            if not st.session_state.get("quiz_submitted"):
+                if st.button("🎯 Generate Quiz", type="primary", key="gen_quiz_btn"):
+                    st.session_state["suspend_autorefresh_until"] = time.time() + 45
+                    with st.spinner("Generating questions..."):
+                        try:
+                            genai.configure(api_key=GEMINI_API_KEY)
+                            model_name = get_gemini_model_name(GEMINI_API_KEY)
+                            model = genai.GenerativeModel(
+                                model_name=model_name,
+                                generation_config={"response_mime_type": "application/json"},
+                            )
+                            prompt = f"""Generate a {difficulty.lower()} quiz with 5 multiple choice questions about: "{selected_lesson['title']}".
+{"Context: " + selected_lesson["content"] if selected_lesson.get("content") else ""}
+
+Difficulty guide:
+- Easy: basic recall and definitions
+- Medium: understanding and application
+- Hard: analysis, edge cases, deep understanding
+
+Return valid JSON only, exactly in this format:
+{{
+  "questions": [
+    {{
+      "question": "Question text here?",
+      "options": ["A. First option", "B. Second option", "C. Third option", "D. Fourth option"],
+      "correct": "A"
+    }}
+  ]
+}}"""
+                            response = model.generate_content(prompt)
+                            raw = (getattr(response, "text", "") or "").strip()
+                            if not raw and getattr(response, "candidates", None):
+                                parts = response.candidates[0].content.parts
+                                raw = "\n".join(
+                                    getattr(p, "text", "") for p in parts if getattr(p, "text", "")
+                                ).strip()
+
+                            quiz_data = normalize_quiz_data(parse_json_payload(raw))
+                            st.session_state["quiz_questions"]  = quiz_data["questions"]
+                            st.session_state["quiz_lesson_id"]  = selected_lesson["id"]
+                            st.session_state["quiz_difficulty"] = difficulty.lower()
+                            st.session_state["quiz_answers"]    = {}
+                        except Exception as e:
+                            st.error(f"Failed to generate quiz. Details: {e}")
+
+                # Display questions
+                if st.session_state.get("quiz_questions"):
+                    st.divider()
+                    questions = st.session_state["quiz_questions"]
+                    for i, q in enumerate(questions):
+                        st.markdown(f"**Q{i+1}. {q['question']}**")
+                        st.radio(
+                            f"q_{i}",
+                            q["options"],
+                            key=f"quiz_q_{i}",
+                            label_visibility="collapsed",
+                        )
+
+                    if st.button("📊 Submit Answers", type="primary", key="submit_quiz_btn"):
+                        questions = st.session_state["quiz_questions"]
+                        correct_count = 0
+                        for i, q in enumerate(questions):
+                            selected_opt = st.session_state.get(f"quiz_q_{i}", "")
+                            # selected_opt is like "A. option text", correct is "A"
+                            if selected_opt and selected_opt[0].upper() == q["correct"].strip()[0].upper():
+                                correct_count += 1
+
+                        total = len(questions)
+                        score = int((correct_count / total) * 100)
+
+                        result = api_post(
+                            f"/api/lessons/{st.session_state['quiz_lesson_id']}/quiz/submit",
+                            {
+                                "difficulty":         st.session_state["quiz_difficulty"],
+                                "score":              score,
+                                "questions_total":    total,
+                                "questions_correct":  correct_count,
+                            },
+                        )
+
+                        st.session_state["quiz_submitted"] = True
+                        st.session_state["quiz_score"]     = score
+                        st.session_state["quiz_correct"]   = correct_count
+                        st.session_state["quiz_total"]     = total
+                        st.session_state["quiz_result"]    = result or {}
+                        st.rerun()
+
+            # Results screen
+            if st.session_state.get("quiz_submitted"):
+                score  = st.session_state["quiz_score"]
+                correct = st.session_state["quiz_correct"]
+                total   = st.session_state["quiz_total"]
+                result  = st.session_state.get("quiz_result", {})
+
+                color = "#48cfad" if score >= 70 else "#feca57" if score >= 40 else "#ff6b6b"
+                grade = "Excellent! 🎉" if score >= 90 else "Good 👍" if score >= 70 else "Keep going 💪" if score >= 40 else "Needs work 📚"
+
+                st.markdown(
+                    f"<div style='text-align:center;padding:32px;background:#1a1d27;"
+                    f"border-radius:12px;border:1px solid #2e3250'>"
+                    f"<div style='font-size:3.5rem;font-weight:800;color:{color}'>{score}%</div>"
+                    f"<div style='color:#e8eaf6;font-size:1.1rem;margin-top:4px'>{grade}</div>"
+                    f"<div style='color:#7986cb;margin-top:6px'>{correct} / {total} correct</div>"
+                    f"<div style='color:#e8eaf6;margin-top:16px;font-size:0.95rem'>"
+                    f"{result.get('message', '')}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                st.markdown("")
+                if st.button("🔄 Take Another Quiz", key="retry_quiz_btn"):
+                    for k in ["quiz_questions", "quiz_answers", "quiz_submitted", "quiz_score",
+                              "quiz_correct", "quiz_total", "quiz_result", "quiz_prev_key"]:
+                        st.session_state.pop(k, None)
+                    st.rerun()
+
+
+# ════════ TAB 6: CHATBOT ════════════════════════════════════════
+with tab_chat:
+    st.markdown("### 🤖 Study Assistant")
+    st.caption("Ask anything about your lessons or learning topics. Select a lesson to give the AI context.")
+
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+    if not GEMINI_API_KEY:
+        st.error("GEMINI_API_KEY not set. Add it to your .env file and restart Docker.")
+    else:
+        # Lesson context selector
+        chat_lessons = api_get("/api/lessons") or []
+        lesson_options = ["None (general chat)"] + [l["title"] for l in chat_lessons]
+        selected_lesson_title = st.selectbox("Lesson context:", lesson_options, key="chat_lesson_select")
+
+        selected_lesson = None
+        if selected_lesson_title != "None (general chat)":
+            selected_lesson = next((l for l in chat_lessons if l["title"] == selected_lesson_title), None)
+
+        # Build system prompt
+        system_prompt = (
+            "You are a helpful study assistant for a spaced repetition learning app. "
+            "Help the user understand and remember their study topics. "
+            "Be concise, clear, and educational. Use examples where helpful."
+        )
+        if selected_lesson:
+            system_prompt += (
+                f"\n\nThe user is currently studying: '{selected_lesson['title']}'."
+            )
+            if selected_lesson.get("content"):
+                system_prompt += f"\nLesson notes: {selected_lesson['content']}"
+            system_prompt += (
+                "\nFocus your answers around this topic. "
+                "Help them understand it deeply so they remember it long-term."
+            )
+
+        # Chat history in session state
+        if "chat_messages" not in st.session_state:
+            st.session_state.chat_messages = []
+
+        # Clear chat button
+        if st.button("🗑 Clear chat", key="clear_chat"):
+            st.session_state.chat_messages = []
+            st.rerun()
+
+        # Display chat history
+        for msg in st.session_state.chat_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Chat input
+        user_input = st.chat_input("Ask something about your lesson...")
+
+        if user_input:
+            st.session_state.chat_messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    try:
+                        genai.configure(api_key=GEMINI_API_KEY)
+                        model_name = get_gemini_model_name(GEMINI_API_KEY)
+                        model = genai.GenerativeModel(
+                            model_name=model_name,
+                            system_instruction=system_prompt,
+                        )
+                        history = [
+                            {"role": m["role"], "parts": [m["content"]]}
+                            for m in st.session_state.chat_messages[:-1]
+                        ]
+                        chat = model.start_chat(history=history)
+                        response = chat.send_message(user_input)
+                        reply = response.text
+                    except Exception as e:
+                        reply = f"Error: {str(e)}"
+
+                st.markdown(reply)
+                st.session_state.chat_messages.append({"role": "assistant", "content": reply})

@@ -12,6 +12,9 @@ This project helps users remember what they learn by scheduling revision reminde
 - ✅ n8n automation pipeline (Trigger → Logic → Notification)
 - ✅ Telegram reminders with inline buttons (Remembered / Forgot)
 - ✅ Live Streamlit dashboard for lessons, stats, and upcoming reviews
+- ✅ Lesson-wise analytics with progress/completion insights
+- ✅ AI-powered quiz generation with adaptive schedule adjustment
+- ✅ AI study chatbot with optional lesson-aware context
 
 ## 🏗️ Architecture
 
@@ -42,10 +45,11 @@ n8n (5678) ──▶ FastAPI Backend (8000) ──▶ SQLite (/data/memory.db)
 
 ## 📦 Tech Stack
 
-- **Frontend:** Streamlit + Plotly
+- **Frontend:** Streamlit + Plotly + Seaborn + Matplotlib
 - **Backend:** FastAPI + SQLite
 - **Automation:** n8n
 - **Notification Channel:** Telegram Bot API
+- **AI:** Google Gemini API (Quiz + Chatbot)
 - **Containerization:** Docker Compose
 
 ## 📁 Project Structure
@@ -108,6 +112,7 @@ Edit `.env` and set:
 
 - `TELEGRAM_BOT_TOKEN=<your_bot_token>`
 - `TELEGRAM_CHAT_ID=<your_chat_id>`
+- `GEMINI_API_KEY=<your_gemini_api_key>`
 
 ### 4) Start all services
 
@@ -152,6 +157,17 @@ curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getWebhookInfo"
 ```
 
 Keep ngrok running during demo.
+
+## 🖥️ Streamlit Tabs
+
+The frontend includes six working tabs:
+
+1. **Dashboard**: retention curve, overall metrics, and upcoming reminders.
+2. **Add Lesson**: logs a lesson and schedules spaced reminders.
+3. **All Lessons**: lesson cards with review-stage progress and delete action.
+4. **Stats**: lesson dropdown + analytics (done/left, quizzes attended, revision attempts, retries, Seaborn chart, and overall narrative review).
+5. **Quiz**: generates MCQ quizzes from Gemini and posts result to backend for adaptive reminder adjustment.
+6. **Chatbot**: lesson-aware Gemini study assistant for Q&A and clarification.
 
 ## 🎬 Judge-Friendly Demo Script
 
@@ -205,12 +221,14 @@ In this implementation, successful recalls increase effective stability over rep
 - `POST /api/lessons`
 - `GET /api/lessons`
 - `GET /api/lessons/{id}`
+- `GET /api/lessons/{id}/analytics`
 - `DELETE /api/lessons/{id}`
 - `GET /api/reminders/due`
 - `POST /api/reminders/{id}/mark-sent`
 - `POST /api/reminders/{id}/feedback`
 - `GET /api/reminders/upcoming`
 - `GET /api/stats`
+- `POST /api/lessons/{id}/quiz/submit`
 
 ## 🛠️ Quick Troubleshooting
 

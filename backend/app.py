@@ -33,6 +33,7 @@ REVIEW_INTERVALS_REAL = {
 }
 
 INTERVAL_LABELS = {1: "1 day", 2: "3 days", 3: "7 days", 4: "14 days", 5: "30 days"}
+PLANNED_REVIEW_STAGES = 5
 
 
 def get_interval_minutes(review_number: int, demo: bool = None) -> int:
@@ -84,6 +85,17 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_reminders_scheduled ON reminders(scheduled_at);
             CREATE INDEX IF NOT EXISTS idx_reminders_status    ON reminders(status);
             CREATE INDEX IF NOT EXISTS idx_reminders_lesson    ON reminders(lesson_id);
+
+            CREATE TABLE IF NOT EXISTS quiz_results (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                lesson_id          INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+                difficulty         TEXT NOT NULL,
+                score              INTEGER NOT NULL,
+                questions_total    INTEGER NOT NULL,
+                questions_correct  INTEGER NOT NULL,
+                adjustment         TEXT NOT NULL DEFAULT 'no_change',
+                created_at         TEXT NOT NULL
+            );
         """)
 
 
@@ -106,6 +118,13 @@ class MarkSentRequest(BaseModel):
     telegram_message_id: Optional[int] = None
 
 
+class QuizSubmit(BaseModel):
+    difficulty: str   # "easy", "medium", "hard"
+    score: int        # 0-100
+    questions_total: int
+    questions_correct: int
+
+
 # ---------- Helper ----------
 
 def retention_percent(review_number: int) -> int:
@@ -124,6 +143,41 @@ def retention_percent(review_number: int) -> int:
 
 def row_to_dict(row) -> dict:
     return dict(row) if row else None
+
+
+def build_overall_review(
+    completion_pct: float,
+    retention_rate: float,
+    quizzes_attended: int,
+    retry_count: int,
+) -> str:
+    review_parts = []
+
+    if completion_pct >= 0.8:
+        review_parts.append("Revision consistency is strong and the lesson is close to fully reinforced.")
+    elif completion_pct >= 0.4:
+        review_parts.append("Progress is steady, but several review stages are still pending.")
+    else:
+        review_parts.append("The lesson is still in an early revision phase and needs more follow-through.")
+
+    if retention_rate >= 0.75:
+        review_parts.append("Recall quality during completed revisions has been stable.")
+    elif retention_rate >= 0.5:
+        review_parts.append("Recall is mixed, so spaced follow-ups should improve stability.")
+    else:
+        review_parts.append("Recall has been challenging so far; tighter repetition would help consolidate memory.")
+
+    if quizzes_attended == 0:
+        review_parts.append("No quizzes have been attempted yet, so understanding checks are still missing.")
+    elif quizzes_attended < 3:
+        review_parts.append("Some quizzes were attempted; adding a few more will improve confidence in retention.")
+    else:
+        review_parts.append("Quiz participation is healthy and supports long-term retention checks.")
+
+    if retry_count > 0:
+        review_parts.append(f"There have been {retry_count} retry reminder(s), indicating topics that needed reinforcement.")
+
+    return " ".join(review_parts)
 
 
 # ---------- Routes ----------
@@ -387,6 +441,155 @@ def get_stats():
             "retention_rate": retention_rate,
             "next_review_in_seconds": next_in_seconds,
             "demo_mode": DEMO_MODE,
+        }
+
+
+@app.post("/api/lessons/{lesson_id}/quiz/submit")
+def submit_quiz(lesson_id: int, body: QuizSubmit):
+    if body.difficulty not in ("easy", "medium", "hard"):
+        raise HTTPException(400, "difficulty must be 'easy', 'medium', or 'hard'")
+    if not (0 <= body.score <= 100):
+        raise HTTPException(400, "score must be between 0 and 100")
+
+    now = datetime.utcnow()
+    with get_db() as conn:
+        lesson = conn.execute("SELECT * FROM lessons WHERE id=?", (lesson_id,)).fetchone()
+        if not lesson:
+            raise HTTPException(404, "Lesson not found")
+
+        adjustment = "no_change"
+
+        if body.score >= 90:
+            # Excellent: skip the next pending reminder
+            next_pending = conn.execute(
+                "SELECT * FROM reminders WHERE lesson_id=? AND status='pending' ORDER BY scheduled_at ASC LIMIT 1",
+                (lesson_id,)
+            ).fetchone()
+            if next_pending:
+                conn.execute(
+                    "UPDATE reminders SET status='remembered', responded_at=? WHERE id=?",
+                    (now.isoformat(), next_pending["id"])
+                )
+                adjustment = "skipped_next_review"
+
+        elif body.score < 40:
+            # Poor: add an extra reminder at the current review level
+            last_reminder = conn.execute(
+                "SELECT * FROM reminders WHERE lesson_id=? ORDER BY created_at DESC LIMIT 1",
+                (lesson_id,)
+            ).fetchone()
+            if last_reminder:
+                review_num = last_reminder["review_number"]
+                delta = max(1, get_interval_minutes(review_num, bool(lesson["demo_mode"])) // 2)
+                new_scheduled = now + timedelta(minutes=delta)
+                conn.execute(
+                    "INSERT INTO reminders (lesson_id, review_number, scheduled_at, created_at) VALUES (?, ?, ?, ?)",
+                    (lesson_id, review_num, new_scheduled.isoformat(), now.isoformat())
+                )
+                adjustment = "added_extra_review"
+
+        # Record quiz result
+        conn.execute(
+            """INSERT INTO quiz_results
+               (lesson_id, difficulty, score, questions_total, questions_correct, adjustment, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (lesson_id, body.difficulty, body.score, body.questions_total,
+             body.questions_correct, adjustment, now.isoformat())
+        )
+
+        messages = {
+            "skipped_next_review": "🎉 Excellent! You nailed it — next scheduled review has been skipped.",
+            "added_extra_review":  "📌 Tough one! An extra review has been added to help reinforce this.",
+            "no_change":           "👍 Good effort! Your review schedule stays on track.",
+        }
+        return {
+            "lesson_id":  lesson_id,
+            "score":      body.score,
+            "adjustment": adjustment,
+            "message":    messages[adjustment],
+        }
+
+
+@app.get("/api/lessons/{lesson_id}/analytics")
+def lesson_analytics(lesson_id: int):
+    with get_db() as conn:
+        lesson = conn.execute("SELECT * FROM lessons WHERE id=?", (lesson_id,)).fetchone()
+        if not lesson:
+            raise HTTPException(404, "Lesson not found")
+
+        reminders = conn.execute(
+            "SELECT * FROM reminders WHERE lesson_id=? ORDER BY review_number ASC, created_at ASC, id ASC",
+            (lesson_id,),
+        ).fetchall()
+
+        stage_details = []
+        stages_completed = 0
+        attempt_status_counts = {"remembered": 0, "forgot": 0, "pending": 0, "sent": 0}
+
+        for r in reminders:
+            if r["status"] in attempt_status_counts:
+                attempt_status_counts[r["status"]] += 1
+
+        for review_number in range(1, PLANNED_REVIEW_STAGES + 1):
+            stage_attempts = [r for r in reminders if r["review_number"] == review_number]
+            latest = stage_attempts[-1] if stage_attempts else None
+            latest_status = latest["status"] if latest else "not_started"
+            stage_done = latest_status == "remembered"
+            if stage_done:
+                stages_completed += 1
+
+            stage_details.append({
+                "review_number": review_number,
+                "attempts": len(stage_attempts),
+                "latest_status": latest_status,
+                "completed": stage_done,
+            })
+
+        quizzes = conn.execute(
+            "SELECT difficulty, score, created_at FROM quiz_results WHERE lesson_id=? ORDER BY created_at ASC",
+            (lesson_id,),
+        ).fetchall()
+
+        quizzes_attended = len(quizzes)
+        difficulty_breakdown = {"easy": 0, "medium": 0, "hard": 0}
+        for q in quizzes:
+            if q["difficulty"] in difficulty_breakdown:
+                difficulty_breakdown[q["difficulty"]] += 1
+
+        responded_total = attempt_status_counts["remembered"] + attempt_status_counts["forgot"]
+        retention_rate = (
+            round(attempt_status_counts["remembered"] / responded_total, 2)
+            if responded_total > 0 else 0.0
+        )
+
+        completion_pct = round(stages_completed / PLANNED_REVIEW_STAGES, 2)
+        stages_remaining = PLANNED_REVIEW_STAGES - stages_completed
+        retry_count = max(0, len(reminders) - PLANNED_REVIEW_STAGES)
+
+        return {
+            "lesson": {
+                "id": lesson["id"],
+                "title": lesson["title"],
+                "created_at": lesson["created_at"],
+                "demo_mode": bool(lesson["demo_mode"]),
+            },
+            "planned_review_stages": PLANNED_REVIEW_STAGES,
+            "review_stages_completed": stages_completed,
+            "review_stages_remaining": stages_remaining,
+            "completion_pct": completion_pct,
+            "reminder_attempts_total": len(reminders),
+            "reminder_attempt_status_counts": attempt_status_counts,
+            "retry_count": retry_count,
+            "retention_rate": retention_rate,
+            "quizzes_attended": quizzes_attended,
+            "quiz_difficulty_breakdown": difficulty_breakdown,
+            "stage_details": stage_details,
+            "overall_review": build_overall_review(
+                completion_pct=completion_pct,
+                retention_rate=retention_rate,
+                quizzes_attended=quizzes_attended,
+                retry_count=retry_count,
+            ),
         }
 
 

@@ -2,3 +2,6 @@ streamlit==1.35.0
 requests==2.32.3
 plotly==5.22.0
 streamlit-autorefresh==1.0.1
+google-generativeai==0.7.2
+matplotlib==3.9.0
+seaborn==0.13.2

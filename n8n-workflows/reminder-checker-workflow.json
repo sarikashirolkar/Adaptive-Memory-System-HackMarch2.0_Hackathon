@@ -42,7 +42,7 @@
         "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: '🔔 *Time to Revise!*\\n\\n📚 *' + $json.lesson_title + '*\\n' + ($json.lesson_content ? '💡 ' + $json.lesson_content : '') + '\\n\\n🔄 This is Review *#' + $json.review_number + '* (' + $json.interval_label + ')\\n📉 Estimated current retention: *~' + $json.retention_estimate + '%*\\n\\nDo you remember this topic?', parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '✅ Remembered', callback_data: 'remembered:' + $json.id }, { text: '❌ Forgot', callback_data: 'forgot:' + $json.id }]] } }) }}",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: '🔔 *Time to Revise!*\\n\\n📚 *' + $json.lesson_title + '*\\n' + ($json.lesson_content ? '💡 ' + $json.lesson_content : '') + '\\n\\n🔄 This is Review *#' + $json.review_number + '* (' + $json.interval_label + ')\\n📉 Estimated current retention: *~' + $json.retention_estimate + '%*\\n\\nDo you remember this topic?\\n\\n📝 Take a quiz anytime from the Streamlit app!', parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '✅ Remembered', callback_data: 'remembered:' + $json.id }, { text: '❌ Forgot', callback_data: 'forgot:' + $json.id }]] } }) }}",
         "options": {}
       },
       "id": "a1b2c3d4-0004-0004-0004-000000000004",
@@ -86,12 +86,8 @@
         "method": "POST",
         "url": "http://backend:8000/api/lessons",
         "sendBody": true,
-        "contentType": "json",
-        "body": {
-          "title":     "={{ $json.body.title }}",
-          "content":   "={{ $json.body.content }}",
-          "demo_mode": "={{ Boolean($json.body.demo_mode) }}"
-        },
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $json.body.title, content: $json.body.content || '', demo_mode: $json.body.demo_mode === true || $json.body.demo_mode === 'true' }) }}",
         "options": {}
       },
       "id": "a1b2c3d4-0013-0013-0013-000000000013",

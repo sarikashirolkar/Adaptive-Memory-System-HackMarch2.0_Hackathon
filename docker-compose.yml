@@ -36,6 +36,7 @@ services:
       # Expose BACKEND_URL so n8n nodes can reference $env.BACKEND_URL
       - BACKEND_URL=http://backend:8000
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - STREAMLIT_URL=${STREAMLIT_URL:-http://localhost:8501}
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
     env_file:
       - .env
@@ -49,6 +50,8 @@ services:
     container_name: memory_frontend
     ports:
       - "8501:8501"
+    env_file:
+      - .env
     environment:
       - BACKEND_URL=http://backend:8000
       - N8N_URL=http://n8n:5678
